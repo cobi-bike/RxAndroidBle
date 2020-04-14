@@ -6,10 +6,11 @@ buildscript {
     repositories {
         google()
         jcenter()
+        mavenLocal()
     }
 
     dependencies {
-        classpath 'com.android.tools.build:gradle:3.5.3'
+        classpath 'com.android.tools.build:gradle:3.6.2'
         classpath 'com.github.ben-manes:gradle-versions-plugin:0.21.0'
         classpath 'org.codehaus.groovy:groovy-android-gradle-plugin:2.0.1'
         classpath "org.jetbrains.kotlin:kotlin-gradle-plugin:$kotlinVersion"

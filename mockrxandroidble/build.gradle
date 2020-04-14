@@ -1,6 +1,10 @@
+plugins {
+    // This plugin allows publishing android libraries
+    id "com.github.dcendents.android-maven" version "2.0"
+}
+
 apply plugin: 'com.android.library'
 apply plugin: 'groovyx.android'
-apply from: rootProject.file('gradle/gradle-mvn-push.gradle')
 
 android {
     compileSdkVersion 28
@@ -38,4 +42,12 @@ dependencies {
     }
     api project(path: ':rxandroidble')
     api rootProject.ext.libs.rxjava
+}
+
+install {
+    repositories.mavenInstaller {
+        pom.groupId = 'com.polidea.rxandroidble2'
+        pom.version = '1.11.2'
+        pom.artifactId = 'mockclient'
+    }
 }

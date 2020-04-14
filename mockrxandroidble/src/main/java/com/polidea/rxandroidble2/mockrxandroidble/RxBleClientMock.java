@@ -4,6 +4,7 @@ import android.bluetooth.BluetoothDevice;
 import android.bluetooth.BluetoothGattCharacteristic;
 import android.bluetooth.BluetoothGattDescriptor;
 import android.bluetooth.BluetoothGattService;
+
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 
@@ -11,7 +12,9 @@ import com.polidea.rxandroidble2.RxBleClient;
 import com.polidea.rxandroidble2.RxBleDevice;
 import com.polidea.rxandroidble2.RxBleDeviceServices;
 import com.polidea.rxandroidble2.RxBleScanResult;
+import com.polidea.rxandroidble2.internal.scan.ScanRecordImplCompat;
 import com.polidea.rxandroidble2.scan.BackgroundScanner;
+import com.polidea.rxandroidble2.scan.ScanCallbackType;
 import com.polidea.rxandroidble2.scan.ScanFilter;
 import com.polidea.rxandroidble2.scan.ScanResult;
 import com.polidea.rxandroidble2.scan.ScanSettings;
@@ -34,6 +37,167 @@ import io.reactivex.subjects.ReplaySubject;
  * characteristics and descriptors the mocked client returns them upon request.
  */
 public class RxBleClientMock extends RxBleClient {
+
+    private Set<RxBleDevice> bondedDevices;
+    private ReplaySubject<RxBleDeviceMock> discoveredDevicesSubject;
+
+    private RxBleClientMock(Builder builder) {
+        bondedDevices = builder.bondedDevices;
+        discoveredDevicesSubject = builder.discoverableDevicesSubject;
+    }
+
+    private static RxBleScanResult convertToPublicRxBleScanResult(RxBleDevice bleDevice, Integer rssi, byte[] scanRecord) {
+        return new RxBleScanResult(bleDevice, rssi, scanRecord);
+    }
+
+    private static ScanResult convertToPublicScanResult(RxBleDevice bleDevice, Integer rssi, byte[] scanRecord) {
+        return new ScanResult(bleDevice, rssi,
+                System.currentTimeMillis(),
+                ScanCallbackType.CALLBACK_TYPE_UNSPECIFIED,
+                new ScanRecordImplCompat(null, null, null,
+                        0, 0, "", scanRecord));
+    }
+
+    private static boolean filterDevice(RxBleDevice rxBleDevice, @Nullable UUID[] filterServiceUUIDs) {
+
+        if (filterServiceUUIDs == null || filterServiceUUIDs.length == 0) {
+            return true;
+        }
+
+        List<UUID> advertisedUUIDs = ((RxBleDeviceMock) rxBleDevice).getAdvertisedUUIDs();
+
+        for (UUID desiredUUID : filterServiceUUIDs) {
+
+            if (!advertisedUUIDs.contains(desiredUUID)) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static boolean filterDevice(RxBleDevice rxBleDevice, final ScanSettings scanSettings, final ScanFilter... scanFilters) {
+        if (scanSettings == null || scanFilters.length == 0) {
+            return true;
+        }
+
+        ArrayList<String> scannedAddresses = new ArrayList<>();
+        ArrayList<String> deviceNames = new ArrayList<>();
+        for (ScanFilter scanFilter : scanFilters) {
+            scannedAddresses.add(scanFilter.getDeviceAddress());
+            deviceNames.add(scanFilter.getDeviceName());
+        }
+
+        RxBleDeviceMock mockDevice = ((RxBleDeviceMock) rxBleDevice);
+
+        if (!scannedAddresses.isEmpty() && !scannedAddresses.contains(mockDevice.getMacAddress())) {
+            return false;
+        }
+        return deviceNames.isEmpty() || !deviceNames.contains(mockDevice.getName());
+    }
+
+    @Override
+    public RxBleDevice getBleDevice(@NonNull final String macAddress) {
+        RxBleDevice rxBleDevice = discoveredDevicesSubject
+                .filter(new Predicate<RxBleDeviceMock>() {
+                    @Override
+                    public boolean test(RxBleDeviceMock device) {
+                        return device.getMacAddress().equals(macAddress);
+                    }
+                })
+                .firstOrError()
+                .blockingGet();
+
+        if (rxBleDevice == null) {
+            throw new IllegalStateException("Mock is not configured for a given mac address. Use Builder#addDevice method.");
+        }
+
+        return rxBleDevice;
+    }
+
+    @Override
+    public Set<RxBleDevice> getBondedDevices() {
+        return bondedDevices;
+    }
+
+    @Override
+    public Observable<RxBleScanResult> scanBleDevices(@Nullable UUID... filterServiceUUIDs) {
+        return createScanOperation(filterServiceUUIDs);
+    }
+
+    @NonNull
+    private Observable<RxBleScanResult> createScanOperation(@Nullable final UUID[] filterServiceUUIDs) {
+        return discoveredDevicesSubject
+                .filter(new Predicate<RxBleDeviceMock>() {
+                    @Override
+                    public boolean test(RxBleDeviceMock rxBleDevice) {
+                        return RxBleClientMock.filterDevice(rxBleDevice, filterServiceUUIDs);
+                    }
+                })
+                .map(new Function<RxBleDeviceMock, RxBleScanResult>() {
+                    @Override
+                    public RxBleScanResult apply(RxBleDeviceMock rxBleDeviceMock) {
+                        return RxBleClientMock.this.createRxBleScanResult(rxBleDeviceMock);
+                    }
+                });
+    }
+
+    @NonNull
+    private Observable<ScanResult> createScanOperation(final ScanSettings scanSettings, final ScanFilter... scanFilters) {
+        return discoveredDevicesSubject
+                .filter(new Predicate<RxBleDeviceMock>() {
+                    @Override
+                    public boolean test(RxBleDeviceMock rxBleDevice) {
+                        return RxBleClientMock.filterDevice(rxBleDevice, scanSettings, scanFilters);
+                    }
+                })
+                .map(new Function<RxBleDeviceMock, ScanResult>() {
+                    @Override
+                    public ScanResult apply(RxBleDeviceMock rxBleDeviceMock) {
+                        return RxBleClientMock.this.createScanResult(rxBleDeviceMock);
+                    }
+                });
+    }
+
+    @NonNull
+    private RxBleScanResult createRxBleScanResult(RxBleDeviceMock rxBleDeviceMock) {
+        return convertToPublicRxBleScanResult(rxBleDeviceMock, rxBleDeviceMock.getRssi(), rxBleDeviceMock.getScanRecord());
+    }
+
+    @NonNull
+    private ScanResult createScanResult(RxBleDeviceMock rxBleDeviceMock) {
+        return convertToPublicScanResult(rxBleDeviceMock, rxBleDeviceMock.getRssi(), rxBleDeviceMock.getScanRecord());
+    }
+
+    @Override
+    public Observable<ScanResult> scanBleDevices(ScanSettings scanSettings, ScanFilter... scanFilters) {
+        return createScanOperation(scanSettings, scanFilters);
+    }
+
+    @Override
+    public BackgroundScanner getBackgroundScanner() {
+        throw new UnsupportedOperationException("Background scanning API is not supported by the mock.");
+    }
+
+    @Override
+    public Observable<State> observeStateChanges() {
+        return Observable.just(State.READY);
+    }
+
+    @Override
+    public State getState() {
+        return State.READY;
+    }
+
+    @Override
+    public boolean isScanRuntimePermissionGranted() {
+        return true;
+    }
+
+    @Override
+    public String[] getRecommendedScanRuntimePermissions() {
+        return new String[0];
+    }
 
     public static class Builder {
 
@@ -122,10 +286,13 @@ public class RxBleClientMock extends RxBleClient {
          * Create the {@link RxBleDeviceMock} instance using the configured values.
          */
         public RxBleDevice build() {
-            if (this.rssi == -1) throw new IllegalStateException("Rssi is required. DeviceBuilder#rssi should be called.");
-            if (this.deviceMacAddress == null) throw new IllegalStateException("DeviceMacAddress required."
-                    + " DeviceBuilder#deviceMacAddress should be called.");
-            if (this.scanRecord == null) throw new IllegalStateException("ScanRecord required. DeviceBuilder#scanRecord should be called.");
+            if (this.rssi == -1)
+                throw new IllegalStateException("Rssi is required. DeviceBuilder#rssi should be called.");
+            if (this.deviceMacAddress == null)
+                throw new IllegalStateException("DeviceMacAddress required."
+                        + " DeviceBuilder#deviceMacAddress should be called.");
+            if (this.scanRecord == null)
+                throw new IllegalStateException("ScanRecord required. DeviceBuilder#scanRecord should be called.");
             RxBleDeviceMock rxBleDeviceMock = new RxBleDeviceMock(deviceName,
                     deviceMacAddress,
                     scanRecord,
@@ -278,116 +445,5 @@ public class RxBleClientMock extends RxBleClient {
         public List<BluetoothGattDescriptor> build() {
             return bluetoothGattDescriptors;
         }
-    }
-
-    private Set<RxBleDevice> bondedDevices;
-    private ReplaySubject<RxBleDeviceMock> discoveredDevicesSubject;
-
-    private RxBleClientMock(Builder builder) {
-        bondedDevices = builder.bondedDevices;
-        discoveredDevicesSubject = builder.discoverableDevicesSubject;
-    }
-
-    @Override
-    public RxBleDevice getBleDevice(@NonNull final String macAddress) {
-        RxBleDevice rxBleDevice = discoveredDevicesSubject
-                .filter(new Predicate<RxBleDeviceMock>() {
-                    @Override
-                    public boolean test(RxBleDeviceMock device) {
-                        return device.getMacAddress().equals(macAddress);
-                    }
-                })
-                .firstOrError()
-                .blockingGet();
-
-        if (rxBleDevice == null) {
-            throw new IllegalStateException("Mock is not configured for a given mac address. Use Builder#addDevice method.");
-        }
-
-        return rxBleDevice;
-    }
-
-    @Override
-    public Set<RxBleDevice> getBondedDevices() {
-        return bondedDevices;
-    }
-
-    @Override
-    public Observable<RxBleScanResult> scanBleDevices(@Nullable UUID... filterServiceUUIDs) {
-        return createScanOperation(filterServiceUUIDs);
-    }
-
-    private static RxBleScanResult convertToPublicScanResult(RxBleDevice bleDevice, Integer rssi, byte[] scanRecord) {
-        return new RxBleScanResult(bleDevice, rssi, scanRecord);
-    }
-
-    @NonNull
-    private Observable<RxBleScanResult> createScanOperation(@Nullable final UUID[] filterServiceUUIDs) {
-        return discoveredDevicesSubject
-                .filter(new Predicate<RxBleDeviceMock>() {
-                    @Override
-                    public boolean test(RxBleDeviceMock rxBleDevice) {
-                        return RxBleClientMock.filterDevice(rxBleDevice, filterServiceUUIDs);
-                    }
-                })
-                .map(new Function<RxBleDeviceMock, RxBleScanResult>() {
-                    @Override
-                    public RxBleScanResult apply(RxBleDeviceMock rxBleDeviceMock) {
-                        return RxBleClientMock.this.createRxBleScanResult(rxBleDeviceMock);
-                    }
-                });
-    }
-
-    @NonNull
-    private RxBleScanResult createRxBleScanResult(RxBleDeviceMock rxBleDeviceMock) {
-        return convertToPublicScanResult(rxBleDeviceMock, rxBleDeviceMock.getRssi(), rxBleDeviceMock.getScanRecord());
-    }
-
-    private static boolean filterDevice(RxBleDevice rxBleDevice, @Nullable UUID[] filterServiceUUIDs) {
-
-        if (filterServiceUUIDs == null || filterServiceUUIDs.length == 0) {
-            return true;
-        }
-
-        List<UUID> advertisedUUIDs = ((RxBleDeviceMock) rxBleDevice).getAdvertisedUUIDs();
-
-        for (UUID desiredUUID : filterServiceUUIDs) {
-
-            if (!advertisedUUIDs.contains(desiredUUID)) {
-                return false;
-            }
-        }
-
-        return true;
-    }
-
-    @Override
-    public Observable<ScanResult> scanBleDevices(ScanSettings scanSettings, ScanFilter... scanFilters) {
-        return Observable.error(new RuntimeException("not implemented")); // TODO [DS]
-    }
-
-    @Override
-    public BackgroundScanner getBackgroundScanner() {
-        throw new UnsupportedOperationException("Background scanning API is not supported by the mock.");
-    }
-
-    @Override
-    public Observable<State> observeStateChanges() {
-        return Observable.just(State.READY);
-    }
-
-    @Override
-    public State getState() {
-        return State.READY;
-    }
-
-    @Override
-    public boolean isScanRuntimePermissionGranted() {
-        return true;
-    }
-
-    @Override
-    public String[] getRecommendedScanRuntimePermissions() {
-        return new String[0];
     }
 }
